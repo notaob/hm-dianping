@@ -12,14 +12,20 @@ import com.hmdp.entity.User;
 import com.hmdp.mapper.UserMapper;
 import com.hmdp.service.IUserService;
 import com.hmdp.utils.RegexUtils;
+import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -40,6 +46,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private IUserService userService;
     @Override
     public Result sendCode(String phone, HttpSession session) {
         // 1.校验手机号
@@ -99,6 +108,83 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         // 8.返回token
         return Result.ok(token);
     }
+
+    @Override
+    public Result queryUserById(Long userId) {
+        //查询详情
+        User user = userService.getById(userId);
+        if (user == null){
+            return Result.ok();
+        }
+        UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
+        return Result.ok(userDTO);
+    }
+
+    @Override
+    public Result logout(HttpServletRequest request) {
+        String token = request.getHeader("authorization");
+        stringRedisTemplate.delete(LOGIN_USER_KEY + token);
+        return Result.ok();
+    }
+
+    @Override
+    public Result sign() {
+        //1.获取当前登录用户
+        Long userId = UserHolder.getUser().getId();
+        //获取日期
+        LocalDateTime now = LocalDateTime.now();
+        //拼接key
+        String keySuffix = now.format(DateTimeFormatter.ofPattern("yyyyMM"));
+
+        String key = USER_SIGN_KEY + userId + ":" + keySuffix;
+        //获取今天是本月的第几天
+        int dayOfMonth = now.getDayOfMonth();
+
+        stringRedisTemplate.opsForValue().setBit(key, dayOfMonth-1, true);
+
+        return Result.ok();
+    }
+
+    @Override
+    public Result signCount() {
+        //1.获取当前登录用户
+        Long userId = UserHolder.getUser().getId();
+        //获取日期
+        LocalDateTime now = LocalDateTime.now();
+        //拼接key
+        String keySuffix = now.format(DateTimeFormatter.ofPattern("yyyyMM"));
+
+        String key = USER_SIGN_KEY + userId + ":" + keySuffix;
+        //获取今天是本月的第几天
+        int dayOfMonth = now.getDayOfMonth();
+        //获取这个月的签到记录
+        List<Long> result = stringRedisTemplate.opsForValue().bitField(
+                key,
+                BitFieldSubCommands.create()
+                        .get(BitFieldSubCommands
+                                .BitFieldType
+                                .unsigned(dayOfMonth)).valueAt(0)
+        );
+        if (result == null || result.isEmpty()){
+            return Result.ok(0);
+        }
+        Long num = result.get(0);
+        if (num == null || num == 0L){
+            return Result.ok(0);
+        }
+        //最大连续签到次数
+
+        int count = 0;
+        while (true){
+            if ((num & 1) == 0){
+                break;
+            }else {
+                count++;
+            }
+        }
+        return Result.ok(count);
+    }
+
 
     private User createUserWithPhone(String phone) {
         User user = new User();
